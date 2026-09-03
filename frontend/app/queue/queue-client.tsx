@@ -5,7 +5,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { useDevSession } from '../../lib/dev-session';
 import { apiGet, ApiError } from '../../lib/api-client';
-import { ORDER_STATUSES, type Order } from '../../lib/types';
+import { ORDER_STATUSES, STATUS_COLORS, type Order, type Unit } from '../../lib/types';
 
 const LIMIT = 10;
 
@@ -22,6 +22,7 @@ export function QueueClient() {
   const [count, setCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [units, setUnits] = useState<Unit[]>([]);
 
   function updateParams(next: Record<string, string | null>) {
     const params = new URLSearchParams(searchParams.toString());
@@ -50,6 +51,13 @@ export function QueueClient() {
       .finally(() => setLoading(false));
   }, [session.userId, session.role, session.unitId, status, unitId, page]);
 
+  useEffect(() => {
+    if (!session.userId || session.role !== 'OWNER') return;
+    apiGet<Unit[]>('/rest/units', session)
+      .then(({ data }) => setUnits(data))
+      .catch(() => {});
+  }, [session.userId, session.role]);
+
   const totalPages = Math.max(1, Math.ceil(count / LIMIT));
 
   return (
@@ -57,6 +65,24 @@ export function QueueClient() {
       <h1 className="mb-4 text-xl font-semibold">Order Queue</h1>
 
       <div className="mb-4 flex flex-wrap items-center gap-3">
+        {session.role === 'OWNER' && (
+          <label className="flex items-center gap-2 text-sm">
+            Unit
+            <select
+              className="rounded border border-zinc-300 bg-white px-2 py-1"
+              value={unitId}
+              onChange={(e) => updateParams({ unitId: e.target.value || null, page: '1' })}
+            >
+              <option value="">All</option>
+              {units.map((u) => (
+                <option key={u.id} value={u.id}>
+                  {u.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+
         <label className="flex items-center gap-2 text-sm">
           Status
           <select
@@ -72,18 +98,6 @@ export function QueueClient() {
             ))}
           </select>
         </label>
-
-        {session.role === 'OWNER' && (
-          <label className="flex items-center gap-2 text-sm">
-            Unit
-            <input
-              className="rounded border border-zinc-300 bg-white px-2 py-1"
-              placeholder="e.g. u1"
-              defaultValue={unitId}
-              onBlur={(e) => updateParams({ unitId: e.target.value || null, page: '1' })}
-            />
-          </label>
-        )}
       </div>
 
       {loading && <p className="text-zinc-500">Loading orders…</p>}
@@ -111,7 +125,11 @@ export function QueueClient() {
                 </td>
                 <td className="px-3 py-2">{order.patientName ?? '—'}</td>
                 <td className="px-3 py-2">{order.unitId}</td>
-                <td className="px-3 py-2">{order.status}</td>
+                <td className="px-3 py-2">
+                  <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${STATUS_COLORS[order.status]}`}>
+                    {order.status}
+                  </span>
+                </td>
                 <td className="px-3 py-2 text-zinc-500">{new Date(order.updatedAt).toLocaleString()}</td>
               </tr>
             ))}

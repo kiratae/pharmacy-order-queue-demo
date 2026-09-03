@@ -10,8 +10,8 @@ export interface DevSession {
 
 export const PRESETS: Record<string, DevSession> = {
   'OWNER': { userId: 'owner-1', role: 'OWNER' },
-  'PHARMACIST (u1)': { userId: 'pharm-1', role: 'PHARMACIST', unitId: 'u1' },
-  'PHARMACIST (u2)': { userId: 'pharm-2', role: 'PHARMACIST', unitId: 'u2' },
+  'PHARMACIST (Unit 1)': { userId: 'pharm-1', role: 'PHARMACIST', unitId: 'u1' },
+  'PHARMACIST (Unit 2)': { userId: 'pharm-2', role: 'PHARMACIST', unitId: 'u2' },
 };
 
 export const DEFAULT_SESSION = PRESETS['OWNER'];

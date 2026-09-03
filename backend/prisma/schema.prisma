@@ -22,10 +22,17 @@ enum ItemStatus {
   REJECTED
 }
 
+model Unit {
+  id     String  @id
+  name   String
+  orders Order[]
+}
+
 model Order {
   id             String      @id @default(cuid())
   consultationId String
   unitId         String
+  unit           Unit        @relation(fields: [unitId], references: [id])
   patientName    String?
   status         OrderStatus @default(RECEIVED)
   createdAt      DateTime    @default(now())

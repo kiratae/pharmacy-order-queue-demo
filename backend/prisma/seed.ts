@@ -76,10 +76,19 @@ const orders: SeedOrder[] = [
   },
 ];
 
+const units = [
+  { id: 'u1', name: 'Unit 1' },
+  { id: 'u2', name: 'Unit 2' },
+];
+
 async function main() {
   await prisma.orderItem.deleteMany();
   await prisma.order.deleteMany();
   await prisma.idempotencyKey.deleteMany();
+
+  for (const unit of units) {
+    await prisma.unit.upsert({ where: { id: unit.id }, create: unit, update: unit });
+  }
 
   for (const seedOrder of orders) {
     await prisma.order.create({

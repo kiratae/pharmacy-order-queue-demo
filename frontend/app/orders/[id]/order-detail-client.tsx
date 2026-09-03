@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useDevSession } from '../../../lib/dev-session';
 import { apiGet, apiPost, ApiError } from '../../../lib/api-client';
-import type { Order } from '../../../lib/types';
+import { STATUS_COLORS, type Order } from '../../../lib/types';
 
 type ReviewChoice = 'accept' | 'reject';
 
@@ -94,8 +94,11 @@ export function OrderDetailClient({ orderId }: { orderId: string }) {
       <h1 className="mt-2 mb-1 text-xl font-semibold">
         {order.consultationId} — {order.patientName ?? 'Unknown patient'}
       </h1>
-      <p className="mb-4 text-sm text-zinc-500">
-        Unit {order.unitId} · Status <span className="font-medium">{order.status}</span>
+      <p className="mb-4 flex items-center gap-2 text-sm text-zinc-500">
+        Unit {order.unitId} · Status
+        <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${STATUS_COLORS[order.status]}`}>
+          {order.status}
+        </span>
       </p>
 
       {actionError && <p className="mb-4 text-red-600">Error: {actionError}</p>}

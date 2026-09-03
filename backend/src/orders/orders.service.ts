@@ -23,7 +23,7 @@ export class OrdersService {
       }
     }
 
-    const data: Prisma.OrderCreateInput = {
+    const data: Prisma.OrderUncheckedCreateInput = {
       consultationId: dto.consultationId,
       unitId: dto.unitId,
       patientName: dto.patientName,
