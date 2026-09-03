@@ -1,0 +1,56 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum OrderStatus {
+  RECEIVED
+  PARTIALLY_ACCEPTED
+  ACCEPTED
+  REJECTED
+  READY
+  COMPLETED
+}
+
+enum ItemStatus {
+  PENDING
+  ACCEPTED
+  REJECTED
+}
+
+model Order {
+  id             String      @id @default(cuid())
+  consultationId String
+  unitId         String
+  patientName    String?
+  status         OrderStatus @default(RECEIVED)
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+  items          OrderItem[]
+
+  @@index([unitId, status])
+  @@index([updatedAt])
+}
+
+model OrderItem {
+  id           String     @id @default(cuid())
+  orderId      String
+  order        Order      @relation(fields: [orderId], references: [id])
+  name         String
+  qty          Int
+  status       ItemStatus @default(PENDING)
+  rejectReason String?
+
+  @@index([orderId])
+}
+
+model IdempotencyKey {
+  key          String   @id
+  orderId      String
+  responseBody Json
+  createdAt    DateTime @default(now())
+}
