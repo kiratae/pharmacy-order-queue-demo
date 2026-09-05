@@ -28,8 +28,11 @@ describe('Orders e2e', () => {
   });
 
   it('idempotent create: same key never creates a second row', async () => {
+    // consultationId is unique per run so the count below only sees this run's rows —
+    // the suite does not wipe the database between runs.
     const key = `test-key-${Date.now()}`;
-    const body = { consultationId: 'CS-e2e', unitId: 'u1', items: [{ name: 'Paracetamol', qty: 5 }] };
+    const consultationId = `CS-e2e-${Date.now()}`;
+    const body = { consultationId, unitId: 'u1', items: [{ name: 'Paracetamol', qty: 5 }] };
 
     const first = await request(app.getHttpServer()).post('/rest/orders').set('Idempotency-Key', key).send(body);
     const second = await request(app.getHttpServer()).post('/rest/orders').set('Idempotency-Key', key).send(body);
@@ -38,7 +41,7 @@ describe('Orders e2e', () => {
     expect(second.status).toBe(201);
     expect(second.body.data.id).toBe(first.body.data.id);
 
-    const count = await prisma.order.count({ where: { consultationId: 'CS-e2e' } });
+    const count = await prisma.order.count({ where: { consultationId } });
     expect(count).toBe(1);
   });
 
@@ -74,6 +77,54 @@ describe('Orders e2e', () => {
 
     const res = await request(app.getHttpServer()).post(`/rest/orders/${order.id}/ready`).set(OWNER).send({});
     expect(res.status).toBe(409);
+  });
+
+  it('concurrent reviews on one order: exactly one wins, the rest get 409', async () => {
+    const order = await prisma.order.create({
+      data: {
+        consultationId: 'CS-race',
+        unitId: 'u1',
+        items: { create: [{ name: 'A', qty: 1 }, { name: 'B', qty: 2 }] },
+      },
+      include: { items: true },
+    });
+    const ids = order.items.map((i) => i.id);
+
+    const results = await Promise.all(
+      Array.from({ length: 4 }, () =>
+        request(app.getHttpServer())
+          .post(`/rest/orders/${order.id}/review`)
+          .set(OWNER)
+          .send({ acceptedItemIds: ids, rejectedItems: [] }),
+      ),
+    );
+
+    expect(results.filter((r) => r.status < 300)).toHaveLength(1);
+    expect(results.filter((r) => r.status === 409)).toHaveLength(3);
+
+    const after = await prisma.order.findUniqueOrThrow({ where: { id: order.id }, include: { items: true } });
+    expect(after.status).toBe('ACCEPTED');
+    expect(after.items.every((i) => i.status === 'ACCEPTED')).toBe(true);
+  });
+
+  it('concurrent ready on one order: exactly one wins', async () => {
+    const order = await prisma.order.create({
+      data: {
+        consultationId: 'CS-race-ready',
+        unitId: 'u1',
+        status: 'ACCEPTED',
+        items: { create: [{ name: 'A', qty: 1, status: 'ACCEPTED' }] },
+      },
+    });
+
+    const results = await Promise.all(
+      Array.from({ length: 3 }, () =>
+        request(app.getHttpServer()).post(`/rest/orders/${order.id}/ready`).set(OWNER).send({}),
+      ),
+    );
+
+    expect(results.filter((r) => r.status < 300)).toHaveLength(1);
+    expect(results.filter((r) => r.status === 409)).toHaveLength(2);
   });
 
   it('meta.count reflects the true matching total, not just the page length', async () => {

@@ -101,38 +101,33 @@ export class OrdersService {
   }
 
   async review(id: string, dto: ReviewOrderDto, authUser: AuthUser): Promise<OrderWithItems> {
-    const order = await this.getOrderOrThrow(id);
-    assertUnitAccess(authUser, order);
-    this.assertTransition(order, ['RECEIVED']);
-    this.assertNotStale(order, dto.expectedUpdatedAt);
+    return this.withLockedOrder(id, authUser, ['RECEIVED'], dto.expectedUpdatedAt, async (tx, order) => {
+      const rejectedIds = dto.rejectedItems.map((r) => r.id);
+      const targetedIds = [...dto.acceptedItemIds, ...rejectedIds];
+      const orderItemIds = order.items.map((item) => item.id);
 
-    const rejectedIds = dto.rejectedItems.map((r) => r.id);
-    const targetedIds = [...dto.acceptedItemIds, ...rejectedIds];
-    const orderItemIds = order.items.map((item) => item.id);
-
-    if (new Set(targetedIds).size !== targetedIds.length) {
-      throw new UnprocessableEntityException('An item cannot appear more than once in the review');
-    }
-    if (targetedIds.length !== orderItemIds.length || !orderItemIds.every((id) => targetedIds.includes(id))) {
-      throw new UnprocessableEntityException('Review must cover every item on the order exactly once');
-    }
-    for (const item of order.items) {
-      if (item.status !== 'PENDING') {
-        throw new ConflictException(`Item ${item.id} was already reviewed`);
+      if (new Set(targetedIds).size !== targetedIds.length) {
+        throw new UnprocessableEntityException('An item cannot appear more than once in the review');
       }
-    }
-    for (const rejected of dto.rejectedItems) {
-      if (!rejected.reason || !rejected.reason.trim()) {
-        throw new UnprocessableEntityException(`Reject reason is required for item ${rejected.id}`);
+      if (targetedIds.length !== orderItemIds.length || !orderItemIds.every((itemId) => targetedIds.includes(itemId))) {
+        throw new UnprocessableEntityException('Review must cover every item on the order exactly once');
       }
-    }
+      for (const item of order.items) {
+        if (item.status !== 'PENDING') {
+          throw new ConflictException(`Item ${item.id} was already reviewed`);
+        }
+      }
+      for (const rejected of dto.rejectedItems) {
+        if (!rejected.reason || !rejected.reason.trim()) {
+          throw new UnprocessableEntityException(`Reject reason is required for item ${rejected.id}`);
+        }
+      }
 
-    const resultingStatuses = order.items.map((item) =>
-      rejectedIds.includes(item.id) ? 'REJECTED' : 'ACCEPTED',
-    );
-    const newStatus = computeReviewedStatus(resultingStatuses);
+      const resultingStatuses = order.items.map((item) =>
+        rejectedIds.includes(item.id) ? 'REJECTED' : 'ACCEPTED',
+      );
+      const newStatus = computeReviewedStatus(resultingStatuses);
 
-    return this.prisma.$transaction(async (tx) => {
       await Promise.all([
         ...dto.acceptedItemIds.map((itemId) =>
           tx.orderItem.update({ where: { id: itemId }, data: { status: ItemStatus.ACCEPTED } }),
@@ -141,29 +136,54 @@ export class OrdersService {
           tx.orderItem.update({ where: { id: r.id }, data: { status: ItemStatus.REJECTED, rejectReason: r.reason } }),
         ),
       ]);
-      const order = await tx.order.update({ where: { id }, data: { status: newStatus }, include: ORDER_INCLUDE });
-      return toOrderWithItems(order);
+      const updated = await tx.order.update({ where: { id }, data: { status: newStatus }, include: ORDER_INCLUDE });
+      return toOrderWithItems(updated);
     });
   }
 
   async ready(id: string, expectedUpdatedAt: string | undefined, authUser: AuthUser): Promise<OrderWithItems> {
-    const order = await this.getOrderOrThrow(id);
-    assertUnitAccess(authUser, order);
-    this.assertTransition(order, ['ACCEPTED', 'PARTIALLY_ACCEPTED']);
-    this.assertNotStale(order, expectedUpdatedAt);
-
-    const updated = await this.prisma.order.update({ where: { id }, data: { status: OrderStatus.READY }, include: ORDER_INCLUDE });
-    return toOrderWithItems(updated);
+    return this.withLockedOrder(id, authUser, ['ACCEPTED', 'PARTIALLY_ACCEPTED'], expectedUpdatedAt, async (tx) => {
+      const updated = await tx.order.update({ where: { id }, data: { status: OrderStatus.READY }, include: ORDER_INCLUDE });
+      return toOrderWithItems(updated);
+    });
   }
 
   async complete(id: string, expectedUpdatedAt: string | undefined, authUser: AuthUser): Promise<OrderWithItems> {
-    const order = await this.getOrderOrThrow(id);
-    assertUnitAccess(authUser, order);
-    this.assertTransition(order, ['READY']);
-    this.assertNotStale(order, expectedUpdatedAt);
+    return this.withLockedOrder(id, authUser, ['READY'], expectedUpdatedAt, async (tx) => {
+      const updated = await tx.order.update({ where: { id }, data: { status: OrderStatus.COMPLETED }, include: ORDER_INCLUDE });
+      return toOrderWithItems(updated);
+    });
+  }
 
-    const updated = await this.prisma.order.update({ where: { id }, data: { status: OrderStatus.COMPLETED }, include: ORDER_INCLUDE });
-    return toOrderWithItems(updated);
+  /**
+   * Runs a state transition under a row lock on the order.
+   *
+   * The lock must be taken BEFORE the status is read: guards that check a status
+   * read outside the transaction are racy, because a concurrent request can commit
+   * a transition in between the read and the write, and both requests then pass.
+   * `FOR UPDATE` holds the row until commit, so a racing request blocks, re-reads
+   * the post-commit status here, and correctly fails its own guard with a 409.
+   */
+  private async withLockedOrder<T>(
+    id: string,
+    authUser: AuthUser,
+    allowedFrom: OrderStatus[],
+    expectedUpdatedAt: string | undefined,
+    run: (tx: Prisma.TransactionClient, order: OrderWithItems) => Promise<T>,
+  ): Promise<T> {
+    return this.prisma.$transaction(async (tx) => {
+      const locked = await tx.$queryRaw<{ id: string }[]>`SELECT id FROM "Order" WHERE id = ${id} FOR UPDATE`;
+      if (locked.length === 0) throw new NotFoundException('Order not found');
+
+      const row = await tx.order.findUniqueOrThrow({ where: { id }, include: ORDER_INCLUDE });
+      const order = toOrderWithItems(row);
+
+      assertUnitAccess(authUser, order);
+      this.assertTransition(order, allowedFrom);
+      this.assertNotStale(order, expectedUpdatedAt);
+
+      return run(tx, order);
+    });
   }
 
   private async getOrderOrThrow(id: string): Promise<OrderWithItems> {

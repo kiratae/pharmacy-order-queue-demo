@@ -26,15 +26,19 @@ function makeOrder(overrides: Record<string, any> = {}) {
 
 // $transaction in the service is called with a callback that itself uses `tx.order`/`tx.orderItem`,
 // so the fake's $transaction must invoke the callback with the same fake client.
+// $queryRaw stands in for the `SELECT ... FOR UPDATE` row lock; real locking behaviour
+// needs a real database and is covered by the concurrency case in the e2e suite.
 function fakePrismaForReview(order: ReturnType<typeof makeOrder>) {
   const prisma: any = {
     order: {
       findUnique: vi.fn().mockResolvedValue(order),
+      findUniqueOrThrow: vi.fn().mockResolvedValue(order),
       update: vi.fn().mockImplementation(({ data }) => Promise.resolve({ ...order, ...data })),
     },
     orderItem: {
       update: vi.fn().mockImplementation(({ where, data }) => Promise.resolve({ id: where.id, ...data })),
     },
+    $queryRaw: vi.fn().mockResolvedValue([{ id: order.id }]),
   };
   prisma.$transaction = vi.fn().mockImplementation((fn: any) => fn(prisma));
   return prisma;
