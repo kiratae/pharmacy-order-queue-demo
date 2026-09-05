@@ -24,6 +24,21 @@ cp .env.local.example .env.local
 npm run dev                  # listens on :3000
 ```
 
+## Environment variables
+
+### Backend (`backend/.env`, copied from `backend/.env.example`)
+
+| Variable | Required | Description |
+|---|---|---|
+| `DATABASE_URL` | Yes | Postgres connection string Prisma uses for both migrations and the running app. |
+| `PORT` | No (defaults to `3001`) | Port the NestJS API listens on. |
+
+### Frontend (`frontend/.env.local`, copied from `frontend/.env.local.example`)
+
+| Variable | Required | Description |
+|---|---|---|
+| `NEXT_PUBLIC_API_BASE_URL` | No (defaults to `http://localhost:3001`) | Base URL the browser calls for all `/rest/*` requests. Prefixed `NEXT_PUBLIC_` so Next.js inlines it into client bundles — only needed if the API isn't on `localhost:3001` (e.g. a deployed backend). |
+
 ### Tests
 
 ```bash

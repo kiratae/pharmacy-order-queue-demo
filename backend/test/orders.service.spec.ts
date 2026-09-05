@@ -11,6 +11,7 @@ function makeOrder(overrides: Record<string, any> = {}) {
     id: 'order-1',
     consultationId: 'CS-1',
     unitId: 'u1',
+    unit: { name: 'Unit 1' },
     patientName: 'Somchai',
     status: 'RECEIVED',
     createdAt: new Date('2026-01-01T00:00:00.000Z'),

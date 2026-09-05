@@ -7,9 +7,17 @@ import type { CreateOrderDto } from './dto/create-order.dto.js';
 import type { ReviewOrderDto } from './dto/review-order.dto.js';
 import type { ListOrdersQueryDto } from './dto/list-orders-query.dto.js';
 
-type OrderWithItems = Order & { items: OrderItem[] };
+type OrderRow = Order & { items: OrderItem[]; unit: { name: string } };
+type OrderWithItems = Omit<OrderRow, 'unit'> & { unitName: string };
+
+const ORDER_INCLUDE = { items: true, unit: { select: { name: true } } } satisfies Prisma.OrderInclude;
 
 const PRISMA_UNIQUE_CONSTRAINT = 'P2002';
+
+function toOrderWithItems(order: OrderRow): OrderWithItems {
+  const { unit, ...rest } = order;
+  return { ...rest, unitName: unit.name };
+}
 
 @Injectable()
 export class OrdersService {
@@ -31,12 +39,13 @@ export class OrdersService {
     };
 
     if (!idempotencyKey) {
-      return this.prisma.order.create({ data, include: { items: true } });
+      const order = await this.prisma.order.create({ data, include: ORDER_INCLUDE });
+      return toOrderWithItems(order);
     }
 
     try {
       return await this.prisma.$transaction(async (tx) => {
-        const order = await tx.order.create({ data, include: { items: true } });
+        const order = toOrderWithItems(await tx.order.create({ data, include: ORDER_INCLUDE }));
         await tx.idempotencyKey.create({
           data: { key: idempotencyKey, orderId: order.id, responseBody: order as unknown as Prisma.InputJsonValue },
         });
@@ -62,7 +71,7 @@ export class OrdersService {
     const [data, count] = await this.prisma.$transaction([
       this.prisma.order.findMany({
         where,
-        include: { items: true },
+        include: ORDER_INCLUDE,
         orderBy: { updatedAt: 'desc' },
         skip: (query.page - 1) * query.limit,
         take: query.limit,
@@ -70,7 +79,19 @@ export class OrdersService {
       this.prisma.order.count({ where }),
     ]);
 
-    return { data, count };
+    return { data: data.map(toOrderWithItems), count };
+  }
+
+  async summary(authUser: AuthUser, unitId?: string): Promise<Record<OrderStatus, number>> {
+    const where: Prisma.OrderWhereInput = {
+      ...buildScopeWhere(authUser),
+      ...(authUser.role === 'OWNER' && unitId ? { unitId } : {}),
+    };
+
+    const grouped = await this.prisma.order.groupBy({ by: ['status'], where, _count: true });
+    const counts = Object.fromEntries(Object.values(OrderStatus).map((s) => [s, 0])) as Record<OrderStatus, number>;
+    for (const g of grouped) counts[g.status] = g._count;
+    return counts;
   }
 
   async findOne(id: string, authUser: AuthUser): Promise<OrderWithItems> {
@@ -120,7 +141,8 @@ export class OrdersService {
           tx.orderItem.update({ where: { id: r.id }, data: { status: ItemStatus.REJECTED, rejectReason: r.reason } }),
         ),
       ]);
-      return tx.order.update({ where: { id }, data: { status: newStatus }, include: { items: true } });
+      const order = await tx.order.update({ where: { id }, data: { status: newStatus }, include: ORDER_INCLUDE });
+      return toOrderWithItems(order);
     });
   }
 
@@ -130,7 +152,8 @@ export class OrdersService {
     this.assertTransition(order, ['ACCEPTED', 'PARTIALLY_ACCEPTED']);
     this.assertNotStale(order, expectedUpdatedAt);
 
-    return this.prisma.order.update({ where: { id }, data: { status: OrderStatus.READY }, include: { items: true } });
+    const updated = await this.prisma.order.update({ where: { id }, data: { status: OrderStatus.READY }, include: ORDER_INCLUDE });
+    return toOrderWithItems(updated);
   }
 
   async complete(id: string, expectedUpdatedAt: string | undefined, authUser: AuthUser): Promise<OrderWithItems> {
@@ -139,13 +162,14 @@ export class OrdersService {
     this.assertTransition(order, ['READY']);
     this.assertNotStale(order, expectedUpdatedAt);
 
-    return this.prisma.order.update({ where: { id }, data: { status: OrderStatus.COMPLETED }, include: { items: true } });
+    const updated = await this.prisma.order.update({ where: { id }, data: { status: OrderStatus.COMPLETED }, include: ORDER_INCLUDE });
+    return toOrderWithItems(updated);
   }
 
   private async getOrderOrThrow(id: string): Promise<OrderWithItems> {
-    const order = await this.prisma.order.findUnique({ where: { id }, include: { items: true } });
+    const order = await this.prisma.order.findUnique({ where: { id }, include: ORDER_INCLUDE });
     if (!order) throw new NotFoundException('Order not found');
-    return order;
+    return toOrderWithItems(order);
   }
 
   private assertTransition(order: Order, allowedFrom: OrderStatus[]): void {

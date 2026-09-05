@@ -23,6 +23,11 @@ export class OrdersController {
     return this.orders.list(query, authUser);
   }
 
+  @Get('summary')
+  summary(@Query('unitId') unitId: string | undefined, @CurrentUser() authUser: AuthUser) {
+    return this.orders.summary(authUser, unitId);
+  }
+
   @Get(':id')
   findOne(@Param('id') id: string, @CurrentUser() authUser: AuthUser) {
     return this.orders.findOne(id, authUser);
